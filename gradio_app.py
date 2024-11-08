@@ -7,18 +7,20 @@ import subprocess
 import torch
 from sam2.build_sam import build_sam2_video_predictor
 import matplotlib.pyplot as plt
-from functools import partial
 from PIL import Image, ImageDraw
-from torch.cuda.amp import autocast
 from enum import Enum
 import gc
 from collections import Counter
-
+from matplotlib import colors as mcolors
+from pycocotools import mask as mask_utils
+import json
 
 CONFIG = {
     "predictor": None,
     "inference_state": None,
     "annotated_frame_dir": Path("autolabeller/Annotated Frames"),
+    "last_frame": None,
+    "json_dir": Path("autolabeller/COCO_JSON"),
 }
 
 
@@ -237,6 +239,14 @@ def load_label_data():
     return label_list
 
 
+def generate_color_for_id(obj_id):
+    # Use a distinct colormap to get a unique color
+    cmap = plt.get_cmap("tab20")
+    color = cmap(obj_id % cmap.N)[:3]  # Get RGB tuple from colormap
+    hex_color = mcolors.to_hex(color)  # Convert to hex for HTML
+    return hex_color
+
+
 def toggle_points(points_state, point_type):
     output_pos = None
     output_neg = None
@@ -315,15 +325,29 @@ def create_mask(
     frame_mask_data,
     obj_id,
     id_2_label,
+    is_edit,
+    selected_obj,
 ):
     predictor = CONFIG["predictor"]
     inference_state = CONFIG["inference_state"]
+    CONFIG["last_frame"] = frame_idx
 
     labels = np.array(points_type, dtype=np.int32)
+    button_msg = "Stop Editing"
 
     # Get new object ID
+    if is_edit:
+        obj = selected_obj[0]
+        obj_id = int(obj.split("_")[0])
+        if obj_id in frame_mask_data.get(frame_idx, {}):
+            del frame_mask_data[frame_idx][obj_id]
 
-    id_2_label[obj_id] = label
+        # Reset edit mode after creating mask
+        is_edit = False
+        button_msg = "Start Editing"
+
+    else:
+        id_2_label[obj_id] = label
 
     # Create mask using predictor
     _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
@@ -338,7 +362,7 @@ def create_mask(
 
     # Process masks
     for i, out_obj_id in enumerate(out_obj_ids):
-        mask = (out_mask_logits[i] > 0.0).cpu().numpy()
+        mask = (out_mask_logits[i] > 0.0).cpu().numpy().squeeze()
 
         # Initialize frame's mask dictionary if needed
         if frame_idx not in frame_mask_data:
@@ -367,8 +391,11 @@ def create_mask(
         points_type,
         frame_mask_data,
         created_masks,
-        obj_id + 1,
+        obj_id + 1 if not is_edit else obj_id,
         id_2_label,
+        is_edit,
+        button_msg,
+        []
     )
 
 
@@ -475,7 +502,6 @@ def undo_masks(
 
 def save_annotated_image(frame_data, frame_mask_data, frame_dir_input, cur_frame_idx):
     video_name = Path(frame_dir_input).stem
-    cur_image = None
     current_annotated_frame_dir = CONFIG["annotated_frame_dir"] / video_name
     if not current_annotated_frame_dir.exists():
         current_annotated_frame_dir.mkdir(exist_ok=True, parents=True)
@@ -488,23 +514,21 @@ def save_annotated_image(frame_data, frame_mask_data, frame_dir_input, cur_frame
             image_np = apply_mask(image_np, frame_mask_data, out_frame_idx)
 
         masked_image_pil = Image.fromarray(image_np)
-        if out_frame_idx == cur_frame_idx:
-            cur_image = masked_image_pil
         # Save the image with proper filename and extension
         output_filename = f"{out_frame_idx:05d}.jpg"
         output_path = current_annotated_frame_dir / output_filename
         masked_image_pil.save(output_path)
-
-    return cur_image
 
 
 def track_masks(
     frame_data,
     frame_mask_data,
     created_masks,
+    id_2_objs,
     frame_dir_input,
     cur_frame_idx,
     frame_2_propagate=None,
+    save_annotaed_image=False,
 ):
     predictor = CONFIG["predictor"]
     inference_state = CONFIG["inference_state"]
@@ -525,14 +549,14 @@ def track_masks(
                 max_frame_num_to_track=frame_2_propagate,
             ):
                 video_segments[out_frame_idx] = {
-                    out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                    out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy().squeeze()
                     for i, out_obj_id in enumerate(out_obj_ids)
                 }
                 print(f"Out frame index {out_frame_idx}")
 
         else:
-            forward_idx = min(frame_mask_data.keys())
-            backward_idx = max(frame_mask_data.keys())
+            forward_idx = min(created_masks.keys())
+            backward_idx = max(created_masks.keys())
             for (
                 out_frame_idx,
                 out_obj_ids,
@@ -541,7 +565,7 @@ def track_masks(
                 inference_state, start_frame_idx=forward_idx, reverse=False
             ):
                 video_segments[out_frame_idx] = {
-                    out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                    out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy().squeeze()
                     for i, out_obj_id in enumerate(out_obj_ids)
                 }
             # Backward propagation: From annotated frame towards the beginning of the video
@@ -555,19 +579,21 @@ def track_masks(
                 reverse=True,  # Backward direction
             ):
                 video_segments[out_frame_idx] = {
-                    out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                    out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy().squeeze()
                     for i, out_obj_id in enumerate(out_obj_ids)
                 }
 
-    cur_image = save_annotated_image(
-        frame_data, video_segments, frame_dir_input, cur_frame_idx
-    )
+            if save_annotaed_image:
+                save_annotated_image(
+                    frame_data, video_segments, frame_dir_input, cur_frame_idx
+                )
+            create_coco_json(frame_data, frame_dir_input, video_segments, id_2_objs)
 
     frame_mask_data.update(video_segments)
 
     reinitialize_predictor(predictor, inference_state, created_masks)
 
-    return cur_image, frame_mask_data
+    return frame_mask_data
 
 
 def reinitialize_predictor(predictor, inference_state, created_masks):
@@ -581,7 +607,7 @@ def reinitialize_predictor(predictor, inference_state, created_masks):
 
             labels = np.array(points_type, dtype=np.int32)
 
-            _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+            predictor.add_new_points_or_box(
                 inference_state=inference_state,
                 frame_idx=frame_idx,
                 obj_id=obj_id,
@@ -592,18 +618,194 @@ def reinitialize_predictor(predictor, inference_state, created_masks):
     CONFIG["predictor"] = predictor
     CONFIG["inference_state"] = inference_state
 
+
 def update_checkBox(id_2_objs):
     print("Update Check Box")
     created_objs = []
     label_counts = Counter(id_2_objs.values())
     cur_occurances = {label: 0 for label in label_counts.keys()}
-    
+
     for id, label in id_2_objs.items():
         entry = f"{id}_{label}_{cur_occurances[label]}"
         cur_occurances[label] += 1
         created_objs.append(entry)
 
-    return created_objs
+    return gr.CheckboxGroup(choices=created_objs, value=[], interactive=True)
+
+
+def create_coco_json(
+    frame_data,
+    frame_dir_input,
+    frame_mask_data,
+    id_2_objs,
+):
+    categories = []
+    images = []
+    annotations = []
+    coco_json = {}
+
+    frame_dir = Path(frame_dir_input)
+    video_name = frame_dir.stem
+
+    # Define unique category IDs
+    unique_labels = sorted(set(id_2_objs.values()))
+    label_to_id = {label: idx + 1 for idx, label in enumerate(unique_labels)}
+    for label, category_id in label_to_id.items():
+        categories.append(
+            {"id": category_id, "name": label.lower(), "supercategory": ""}
+        )
+
+    coco_json["licenses"] = [{"name": "", "id": 0, "url": ""}]
+    coco_json["info"] = {
+        "contributor": "",
+        "date_created": "",
+        "description": "",
+        "url": "",
+        "version": "",
+        "year": "",
+    }
+
+    # Image entries
+    output_pattern = "%05d.jpg"
+    for frame_idx in range(len(frame_data)):
+        file_name = output_pattern % frame_idx
+        images.append(
+            {
+                "id": frame_idx + 1,
+                "license": 0,
+                "file_name": file_name,
+                "height": 1100,
+                "width": 1604,
+                "flickr_url": "",
+                "coco_url": "",
+                "date_captured": 0,
+            }
+        )
+
+    # Annotation entries with RLE segmentation
+    annotation_id = 1
+    for frame_idx in range(len(frame_data)):
+        if frame_idx not in frame_mask_data:
+            continue
+        masks = frame_mask_data[frame_idx]
+        for obj_id, mask in masks.items():
+            label = id_2_objs.get(obj_id, "Unknown")
+            category_id = label_to_id.get(label, -1)
+
+            if category_id == -1:
+                print(f"Warning: Label '{label}' not found in category list.")
+                continue
+
+            if mask.ndim > 2:
+                mask = mask.squeeze()
+
+            # Threshold mask to binary
+            binary_mask = (mask > 0).astype(np.uint8)
+
+            # Convert binary mask to Fortran order for RLE encoding
+            mask_fortran = np.asfortranarray(binary_mask)
+            rle = mask_utils.encode(mask_fortran)
+
+            # Convert 'counts' to a list of integers (uncompressed RLE)
+            counts_bytes = rle["counts"]
+            if isinstance(counts_bytes, bytes):
+                counts_array = np.frombuffer(counts_bytes, dtype=np.uint8)
+                counts_list = counts_array.tolist()
+            else:
+                counts_list = rle["counts"]
+
+            segmentation = {"size": rle["size"], "counts": counts_list}
+
+            # Calculate area
+            area = float(mask_utils.area(rle))
+
+            # Calculate bounding box
+            bbox = mask_utils.toBbox(rle).tolist()
+
+            # Validate area and bbox
+            if area == 0 or all(v == 0 for v in bbox):
+                print(
+                    f"Warning: Zero area or bounding box for object ID {obj_id} in frame {frame_idx}"
+                )
+                continue
+
+            annotations.append(
+                {
+                    "id": annotation_id,
+                    "image_id": frame_idx + 1,
+                    "category_id": category_id,
+                    "segmentation": [],
+                    "area": area,
+                    "bbox": bbox,
+                    "iscrowd": 0,
+                    "attributes": {
+                        "occluded": False,
+                        "rotation": 0.0,
+                        "track_id": obj_id,
+                        "keyframe": True,
+                    },
+                },
+            )
+            annotation_id += 1
+
+    coco_json.update(
+        {"categories": categories, "images": images, "annotations": annotations}
+    )
+
+    output_path = CONFIG["json_dir"] / f"{video_name}.json"
+    with open(output_path, "w") as json_file:
+        json.dump(coco_json, json_file)
+
+    output_path = frame_dir / "annotation.json"
+    with open(output_path, "w") as json_file:
+        json.dump(coco_json, json_file)
+
+    print("COCO Annotation Saved")
+
+
+def edit_mask(selected_objs, frame_mask_data, frame_data, frame_idx, is_edit):
+    if not selected_objs:
+        print("No mask selected for editing.")
+        return (
+            Image.open(frame_data[frame_idx]).convert("RGB"),
+            False,  # Reset edit mode
+            "Start Editing",  # Reset button text
+            []  # Clear selection
+        )
+
+    obj = selected_objs[0]  # Get the first selected object
+    obj_id = int(obj.split("_")[0])
+
+    # Create a copy of mask data to avoid modifying the original
+    local_mask_data = frame_mask_data.copy()
+
+    # Toggle edit mode
+    if is_edit:
+        # Exiting edit mode - use original mask data to show all masks
+        button_msg = "Start Editing"
+        print(f"Stopped editing mask for object ID: {obj_id}")
+        is_edit = False
+        selected = []  # Clear selection when stopping edit
+        local_mask_data = frame_mask_data  # Use original mask data with all masks
+    else:
+        # Entering edit mode
+        button_msg = "Stop Editing"
+        if frame_idx in frame_mask_data and obj_id in frame_mask_data[frame_idx]:
+            # Temporarily remove the mask being edited from display
+            if frame_idx not in local_mask_data:
+                local_mask_data[frame_idx] = {}
+            local_mask_data[frame_idx] = frame_mask_data[frame_idx].copy()  # Copy the frame's masks
+            del local_mask_data[frame_idx][obj_id]  # Remove only the edited mask
+            print(f"Started editing mask for object ID: {obj_id}")
+        is_edit = True
+        selected = selected_objs  # Maintain selection while editing
+
+    # Update the display
+    blank_image_pil = Image.open(frame_data[frame_idx]).convert("RGB")
+    blank_image = np.array(blank_image_pil)
+    image_w_mask = apply_mask(blank_image, local_mask_data, frame_idx)
+
+    return image_w_mask, is_edit, button_msg, selected
 
 
 def annotate_frame_tab():
@@ -617,6 +819,7 @@ def annotate_frame_tab():
         created_masks = gr.State({})
         num_obj_id = gr.State(0)
         id_2_label = gr.State({})
+        is_edit = gr.State(False)
 
         with gr.Row():
             frame_dir_input = gr.Textbox(
@@ -631,10 +834,9 @@ def annotate_frame_tab():
 
         with gr.Row():
             created_objs = gr.CheckboxGroup(
-                choices=[],
-                label="Created Object Masks",
-                value=[]  
+                choices=[], label="Created Object Masks", value=[]
             )
+            edit_button = gr.Button("Start Editing")
 
         with gr.Row():
             with gr.Column(min_width=802):
@@ -701,6 +903,8 @@ def annotate_frame_tab():
                 frame_mask_data,
                 num_obj_id,
                 id_2_label,
+                is_edit,
+                created_objs,
             ],
             outputs=[
                 image_display,
@@ -710,6 +914,9 @@ def annotate_frame_tab():
                 created_masks,
                 num_obj_id,
                 id_2_label,
+                is_edit,
+                edit_button,
+                created_objs
             ],
         )
 
@@ -744,11 +951,12 @@ def annotate_frame_tab():
                 frame_data,
                 frame_mask_data,
                 created_masks,
+                id_2_label,
                 frame_dir_input,
                 frame_slider,
                 propagate_frame_input,
             ],
-            outputs=[image_display, frame_mask_data],
+            outputs=[frame_mask_data],
         )
 
         track_mask_button.click(
@@ -757,16 +965,20 @@ def annotate_frame_tab():
                 frame_data,
                 frame_mask_data,
                 created_masks,
+                id_2_label,
                 frame_dir_input,
                 frame_slider,
             ],
-            outputs=[image_display, frame_mask_data],
+            outputs=[frame_mask_data],
+        )
+        edit_button.click(
+            fn=edit_mask,
+            inputs=[created_objs, frame_mask_data, frame_data, frame_slider, is_edit],
+            outputs=[image_display, is_edit, edit_button, created_objs],
         )
 
         id_2_label.change(
-            fn=update_checkBox,
-            inputs=[id_2_label],
-            outputs=[created_objs]
+            fn=update_checkBox, inputs=[id_2_label], outputs=[created_objs]
         )
 
 
@@ -793,6 +1005,7 @@ if __name__ == "__main__":
 
     CONFIG["frame_dir"] = Path("autolabeller/Frames")
     CONFIG["frame_dir"].mkdir(exist_ok=True, parents=True)
+    CONFIG["json_dir"].mkdir(exist_ok=True, parents=True)
 
     demo = main()
     demo.launch()
