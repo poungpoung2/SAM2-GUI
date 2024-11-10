@@ -74,7 +74,7 @@
 
 ### Run the Annotator
 
-From the `segment-anything` root directory, execute:
+From the `sam2` root directory, execute:
 
 ```bash
 python sam2/gradio_app.py
