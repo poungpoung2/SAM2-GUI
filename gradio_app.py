@@ -15,6 +15,8 @@ from matplotlib import colors as mcolors
 from pycocotools import mask as mask_utils
 import json
 
+
+# Configuration setting
 CONFIG = {
     "predictor": None,
     "inference_state": None,
@@ -24,12 +26,14 @@ CONFIG = {
 }
 
 
+# Positive/Negative Point Toggle Custom State
 class PointState(Enum):
     POSITIVE = "Positive"
     NEGATIVE = "Negative"
     OFF = "Off"
 
 
+# Collect memory
 def gc_collect():
     gc.collect()
     print("Garbage collection complete.")
@@ -40,6 +44,7 @@ def gc_collect():
         print("Cleared PyTorch CUDA cache.")
 
 
+# Set up seed
 def seed(seed=42):
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -57,6 +62,7 @@ def seed(seed=42):
     print(f"Seed set to {seed}")
 
 
+# Setup the device
 def setup_device():
     device = torch.device("cpu")
     if torch.cuda.is_available():
@@ -82,13 +88,12 @@ def setup_device():
     return device
 
 
+# Load the sam model 
 def load_sam(
-    model_cfg="sam2/configs/sam2.1/sam2.1_hiera_b+.yaml",
-    sam2_checkpoint="checkpoints/sam2.1_hiera_base_plus.pt",
+    model_cfg,
+    sam2_checkpoint
 ):
     device = CONFIG["device"]
-    model_cfg = "configs/sam2.1/sam2.1_hiera_b+.yaml"
-    sam2_checkpoint = "checkpoints/sam2.1_hiera_base_plus.pt"
     try:
         predictor = build_sam2_video_predictor(
             model_cfg, sam2_checkpoint, device=device
@@ -99,9 +104,13 @@ def load_sam(
         print(f"Failed to load SAMv2 Predictor: {e}")
 
 
+
+# Extract frames from video
 def extract_frames(videos_list, video_paths_state):
+    # Get the framed directory
     frame_dir = CONFIG.get("frame_dir")
 
+    # Loop through video list
     for video in videos_list:
         print(f"Extracting frames from {video}")
 
@@ -110,7 +119,8 @@ def extract_frames(videos_list, video_paths_state):
         # Create a directory for each video's frames
         output_dir = (
             frame_dir / video.split(".")[0]
-        )  # Use stem to get the video name without the extension
+        )  
+        # Use stem to get the video name without the extension
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Define the output pattern for the extracted frames
@@ -134,15 +144,19 @@ def extract_frames(videos_list, video_paths_state):
     return f"Extraction Complete"
 
 
+# Extract frames for all videos in the Videos directory
 def extract_all_frames(video_paths_state):
     if not video_paths_state:
         return "No videos loaded"
     return extract_frames(list(video_paths_state.keys()), video_paths_state)
 
 
+# Load the videos
 def load_videos(dir_str):
+    # Get Videos directory path
     dir_path = Path(dir_str)
     video_data = {}
+    # Save the path for all valid videos
     if dir_path.exists() and dir_path.is_dir():
         videos_list = list(dir_path.glob("*.mp4"))
         if videos_list:
@@ -151,6 +165,7 @@ def load_videos(dir_str):
     return video_data, list(video_data.keys())
 
 
+# Update the video option dropdown
 def update_dropdown(dir_path):
     video_dict, video_names = load_videos(dir_path)
     return (
@@ -159,16 +174,21 @@ def update_dropdown(dir_path):
     )
 
 
+# Create tab for frame extraction
 def extract_frame_tab():
     gr.Markdown("## Frame Extraction")
     video_paths_state = gr.State({})
 
     with gr.Row():
+        # Create textbox to get video directory path
         video_dir_input = gr.Textbox(
             label="Video Directory Path", placeholder="Enter path to videos...", lines=1
         )
+
+        # Dropdown to display video options
         video_dropdown = gr.Dropdown(choices=[], multiselect=True, interactive=True)
 
+        # Grab all the video paths in the folder when user press enter
         video_dir_input.submit(
             fn=update_dropdown,
             inputs=video_dir_input,
@@ -176,31 +196,43 @@ def extract_frame_tab():
         )
 
     with gr.Row():
+        # Button to handle choose video to extract
         extract_selected_button = gr.Button("Extract Selected Videos")
+        # Button to handle extract all option
         extract_all_button = gr.Button("Extract All")
+        # Show status
         extract_status = gr.Textbox(label="Status")
 
+        # Extract the frames for selected videos in dropdown
         extract_selected_button.click(
             fn=extract_frames,
             inputs=[video_dropdown, video_paths_state],
             outputs=extract_status,
         )
 
+        # Extract frames for all videos
         extract_all_button.click(
             fn=extract_all_frames, inputs=[video_paths_state], outputs=extract_status
         )
 
 
+# Load the frames in directory
 def load_frames(dir_str):
+    # Get the SAMv2 model
     predictor = CONFIG["predictor"]
     frame_data = []
     dir_path = Path(dir_str)
+    # Check if the path exists
     if dir_path.exists() and dir_path.is_dir():
+        # Grab all the frame
         frame_data = list(dir_path.rglob("*.jpg"))
+        # Sort the frames
         if frame_data:
             frame_data = sorted(frame_data, key=lambda frame: frame.stem)
+        # Load the inference state with the frames
         CONFIG["inference_state"] = predictor.init_state(dir_str)
 
+    # Return a Slider to navigate frames
     return frame_data, gr.Slider(
         minimum=0,
         maximum=len(frame_data) - 1,
@@ -210,19 +242,25 @@ def load_frames(dir_str):
     )
 
 
+# Function to display image for certain frame index
 def display_image(frame_data, frame_slider, frame_mask_data):
+    # Open the image in RGB format
     image = Image.open(frame_data[frame_slider]).convert("RGB")
+    # Convert it to np array
     image_np = np.array(image)
 
+    # If there exists a mask for this frame index
     if frame_slider in frame_mask_data:
+        # Apply the segmentation mask on the image
         masked_image = apply_mask(image_np, frame_mask_data, frame_slider)
         masked_image_pil = Image.fromarray(masked_image)
     else:
         masked_image_pil = image
 
+    # Return the masked image
     return masked_image_pil
 
-
+# List of possible label options
 def load_label_data():
     label_list = [
         "Barrel",
@@ -235,10 +273,14 @@ def load_label_data():
         "Stop",
         "Yield",
         "Barricade-t3",
+        "3-bulb",
+        "4-bulb",
+        "5-bulb"
     ]
     return label_list
 
 
+# Generate color for each object
 def generate_color_for_id(obj_id):
     # Use a distinct colormap to get a unique color
     cmap = plt.get_cmap("tab20")
@@ -247,26 +289,32 @@ def generate_color_for_id(obj_id):
     return hex_color
 
 
+# Function to change the point stage (Postivie/Negative/Off)
 def toggle_points(points_state, point_type):
     output_pos = None
     output_neg = None
+    # If the point is on and the currently selected mode button is pressed again
     if points_state != PointState.OFF and points_state == PointState(point_type):
+        # Turn off the point annotating mode
         points_state = PointState.OFF
         output_pos = f"Create Positive Points"
         output_neg = f"Create Negative Points"
     else:
+        # Check if the positive point button is pressed
         if point_type == "Positive":
             points_state = PointState.POSITIVE
             output_pos = "Stop Positive Points"
             output_neg = "Create Negative Points"
+        # Check if the negative point button is pressed
         else:
             points_state = PointState.NEGATIVE
             output_pos = "Create Positive Points"
             output_neg = "Stop Negative Points"
 
+    # Return button inner text and point state
     return output_pos, output_neg, points_state
 
-
+# Function to display the annoated points
 def display_points(image, points, points_type):
     # Check if the image is a PIL Image
     if isinstance(image, Image.Image):
@@ -274,21 +322,28 @@ def display_points(image, points, points_type):
     else:
         # Assume it's a NumPy array
         img = Image.fromarray(image).convert("RGBA")
+
+    # Default overlay and draws
     overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
 
+    # Loop through all the points
     for point, p_type in zip(points, points_type):
         x, y = point
         radius = 5
-        if p_type == 1:  # Positive
+        # Check if positive point (1)
+        if p_type == 1:  
             fill_color = (255, 0, 0, 128)  # Semi-transparent red
             outline_color = (255, 0, 0, 255)  # Opaque red
-        elif p_type == 0:  # Negative
+        # Check if negative points
+        elif p_type == 0:  
             fill_color = (0, 0, 255, 128)  # Semi-transparent blue
             outline_color = (0, 0, 255, 255)  # Opaque blue
+        # If the point is off skip
         else:
-            continue  # Skip if undefined
+            continue    
 
+        # Draw the point on the image
         draw.ellipse(
             (x - radius, y - radius, x + radius, y + radius),
             fill=fill_color,
@@ -296,25 +351,32 @@ def display_points(image, points, points_type):
             width=2,
         )
 
+    # Combine the image and the overlay
     combined = Image.alpha_composite(img, overlay)
 
+    # Return the annoated image
     return combined
 
-
+# Function to manage drawing points process on the image
 def draw_points(points_state, image, points, points_type, evt: gr.SelectData):
+    # Check if the point annoation is off
     if points_state == PointState.OFF:
         return image, points, points_type
 
+    # Check if the image was clicked
     if evt is not None:
         x, y = evt.index
-        print(f"Clicked at ({x}, {y})")
+        # Append the clicked pixel coordinate
         points.append((x, y))
+        # Append the point mode for this click action
         points_type.append(1 if points_state == PointState.POSITIVE else 0)
 
+    # Display the point on the image and return
     image_w_points = display_points(image, points, points_type)
     return image_w_points, points, points_type
 
 
+# Function to manage mask creation (using the annotated points for mask generation)
 def create_mask(
     frame_data,
     frame_idx,
@@ -328,17 +390,20 @@ def create_mask(
     is_edit,
     selected_obj,
 ):
+    # Load the preditor and inferene state
     predictor = CONFIG["predictor"]
     inference_state = CONFIG["inference_state"]
     CONFIG["last_frame"] = frame_idx
 
+    # Get the lables (point type) into an numpy array
     labels = np.array(points_type, dtype=np.int32)
     button_msg = "Stop Editing"
 
-    # Get new object ID
+    # Check if the edit mode is on
     if is_edit:
         obj = selected_obj[0]
         obj_id = int(obj.split("_")[0])
+        # Remove the previsouly created mask for the selected object
         if obj_id in frame_mask_data.get(frame_idx, {}):
             del frame_mask_data[frame_idx][obj_id]
 
@@ -358,6 +423,7 @@ def create_mask(
         labels=labels,
     )
 
+    # Update the predictor state
     CONFIG["predictor"] = predictor
 
     # Process masks
@@ -370,17 +436,21 @@ def create_mask(
         # Store mask
         frame_mask_data[frame_idx][out_obj_id] = mask
 
+    # Save the created mask into a dictionary
     if frame_idx not in created_masks:
         created_masks[frame_idx] = {}
     if obj_id not in created_masks[frame_idx]:
         created_masks[frame_idx][obj_id] = {}
 
+    # Save the created masks data for undo
     created_masks[frame_idx][obj_id]["points"] = points
     created_masks[frame_idx][obj_id]["points_type"] = points_type
 
+    # Reset the points and points type for next mask generation
     points = []
     points_type = []
 
+    # Apply the created mask onto the image
     blank_image_pil = Image.open(frame_data[frame_idx]).convert("RGB")
     blank_image = np.array(blank_image_pil)
     image_w_mask = apply_mask(blank_image, frame_mask_data, frame_idx)
@@ -395,10 +465,11 @@ def create_mask(
         id_2_label,
         is_edit,
         button_msg,
-        []
+        [],
     )
 
 
+# Function to create the colored mask for a binary mask array
 def show_mask(mask, obj_id=None, random_color=False):
     mask = mask.astype(bool)
     color = None
@@ -421,6 +492,7 @@ def show_mask(mask, obj_id=None, random_color=False):
     return colored_mask
 
 
+# A function to apply the mask onto the image
 def apply_mask(image, frame_mask_data, frame_idx, alpha=0.5):
     # Convert image to float32 for blending
     image_float = image.astype(np.float32) / 255.0
@@ -455,8 +527,11 @@ def apply_mask(image, frame_mask_data, frame_idx, alpha=0.5):
     return result
 
 
-def undo_points(frame_data, frame_idx, points, points_type, points_state):
+# A function to undo points
+def undo_points(frame_data, frame_idx, points, points_type):
+    # Check if there is any point to remove
     if len(points) > 0:
+        # Remove the points
         removed_point = points[-1]
         new_points = points[:-1]
         new_points_type = points_type[:-1]
@@ -466,14 +541,16 @@ def undo_points(frame_data, frame_idx, points, points_type, points_state):
         new_points = points
         new_points_type = points_type
 
+    # Update the displayed image
     blank_image = Image.open(frame_data[frame_idx])
     image_w_points = display_points(blank_image, new_points, new_points_type)
     return image_w_points, new_points, new_points_type
 
-
+# A function to undo previously created mask
 def undo_masks(
     frame_data, frame_mask_data, created_masks, frame_idx, obj_id, id_2_label
 ):
+    # Check if there are no masks created
     if obj_id <= 0:
         print("No masks to undo.")
         return (
@@ -483,7 +560,9 @@ def undo_masks(
             id_2_label,
         )
 
+    # Reduce the object id
     obj_id -= 1
+    # Remove the previous mask
     if obj_id in frame_mask_data.get(frame_idx, {}):
         del frame_mask_data[frame_idx][obj_id]
         if obj_id in id_2_label:
@@ -493,6 +572,7 @@ def undo_masks(
     else:
         print(f"No mask found for object ID: {obj_id}")
 
+    # Update the displayed image
     blank_image_pil = Image.open(frame_data[frame_idx]).convert("RGB")
     blank_image = np.array(blank_image_pil)
     image_w_mask = apply_mask(blank_image, frame_mask_data, frame_idx)
@@ -500,6 +580,7 @@ def undo_masks(
     return image_w_mask, frame_mask_data, created_masks, obj_id, id_2_label
 
 
+# A function to save the annoated image
 def save_annotated_image(frame_data, frame_mask_data, frame_dir_input, cur_frame_idx):
     video_name = Path(frame_dir_input).stem
     current_annotated_frame_dir = CONFIG["annotated_frame_dir"] / video_name
@@ -520,6 +601,7 @@ def save_annotated_image(frame_data, frame_mask_data, frame_dir_input, cur_frame
         masked_image_pil.save(output_path)
 
 
+# A function to track masks over multiple frames
 def track_masks(
     frame_data,
     frame_mask_data,
@@ -528,16 +610,20 @@ def track_masks(
     frame_dir_input,
     cur_frame_idx,
     frame_2_propagate=None,
-    save_annotaed_image=False,
+    save_annotated_image=False,
 ):
+    # Load predictor and inference state
     predictor = CONFIG["predictor"]
     inference_state = CONFIG["inference_state"]
+    # Dictionary to save the generated masks for each frame
     video_segments = {}
 
     with torch.autocast("cuda", dtype=torch.bfloat16):
+        # Check if the model is propagating only a certain number of frames
         if frame_2_propagate is not None:
             print(f"Cur Frame: {cur_frame_idx}")
             frame_2_propagate = int(frame_2_propagate)
+            # Propage the video and save the masks
             for (
                 out_frame_idx,
                 out_obj_ids,
@@ -552,11 +638,13 @@ def track_masks(
                     out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy().squeeze()
                     for i, out_obj_id in enumerate(out_obj_ids)
                 }
-                print(f"Out frame index {out_frame_idx}")
 
+        # If we are tracking through all the videos
         else:
+            # Find the idx to start forward and bacward tracking to reduce the number of overlaps
             forward_idx = min(created_masks.keys())
             backward_idx = max(created_masks.keys())
+            # Forward propagation
             for (
                 out_frame_idx,
                 out_obj_ids,
@@ -568,7 +656,7 @@ def track_masks(
                     out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy().squeeze()
                     for i, out_obj_id in enumerate(out_obj_ids)
                 }
-            # Backward propagation: From annotated frame towards the beginning of the video
+            # Backward propagation
             for (
                 out_frame_idx,
                 out_obj_ids,
@@ -583,23 +671,28 @@ def track_masks(
                     for i, out_obj_id in enumerate(out_obj_ids)
                 }
 
-            if save_annotaed_image:
+            # Check if the annotated framem images should be saved (Default False)
+            if save_annotated_image:
                 save_annotated_image(
                     frame_data, video_segments, frame_dir_input, cur_frame_idx
                 )
-            create_coco_json(frame_data, frame_dir_input, video_segments, id_2_objs)
+            #create_coco_json(frame_data, frame_dir_input, video_segments, id_2_objs)
 
+    # Update the mask data for each frame
     frame_mask_data.update(video_segments)
 
+    # Call a function reinitliaze the model as the model should be resetted after each tracking session
     reinitialize_predictor(predictor, inference_state, created_masks)
 
     return frame_mask_data
 
-
+# A function to reload the annoated frame information onto the model
 def reinitialize_predictor(predictor, inference_state, created_masks):
+    # Reset the state of the predictor
     predictor.reset_state(inference_state)
     print("Reinitialzing predictor")
 
+    # Loop through the annoated mask for the users
     for frame_idx, objects in created_masks.items():
         for obj_id, obj_data in objects.items():
             points = obj_data.get("points", [])
@@ -607,6 +700,7 @@ def reinitialize_predictor(predictor, inference_state, created_masks):
 
             labels = np.array(points_type, dtype=np.int32)
 
+            # Reload the annoatation infomration to the model
             predictor.add_new_points_or_box(
                 inference_state=inference_state,
                 frame_idx=frame_idx,
@@ -615,29 +709,120 @@ def reinitialize_predictor(predictor, inference_state, created_masks):
                 labels=labels,
             )
 
+    # Save the reloaded model
     CONFIG["predictor"] = predictor
     CONFIG["inference_state"] = inference_state
 
-
-def update_checkBox(id_2_objs):
-    print("Update Check Box")
+# Function to update the created objects and traffic label 
+def update_checkBoxes(frame_idx, id_2_objs, id_2_traffic):
+    # Save the objects
     created_objs = []
+    created_traffics = []
+    # Count the number of occurances
     label_counts = Counter(id_2_objs.values())
     cur_occurances = {label: 0 for label in label_counts.keys()}
 
+    # Loop through all the created objects
     for id, label in id_2_objs.items():
-        entry = f"{id}_{label}_{cur_occurances[label]}"
-        cur_occurances[label] += 1
+        # Check if this object is a traffic and a state is assinged
+        if id in id_2_traffic and frame_idx in id_2_traffic[id]:
+            # Fillout the text to be displayed
+            traffic_data = id_2_traffic[id][frame_idx]
+            entry = f"{id}_{traffic_data}_{cur_occurances[label]}"
+        else:
+            entry = f"{id}_{label}_{cur_occurances[label]}"
+            # Check if the object is a traffic 
+            if "bulb" in label:
+                # Save it to the list that stores unassinged traffics
+                created_traffics.append(entry)
+        
         created_objs.append(entry)
+        cur_occurances[label] += 1
 
-    return gr.CheckboxGroup(choices=created_objs, value=[], interactive=True)
+    return gr.CheckboxGroup(
+        choices=created_objs, value=[], interactive=True, label="Created Object Masks {obj_id}_{label}_{cur_occurances}"
+    ), gr.CheckboxGroup(
+        choices=created_traffics, value=[], interactive=True, label="Traffic States that should be annotated"
+    )
+
+# A function to display the unannotated traffic object ranges
+def unannotated_traffic(id_2_objs, id_2_traffic, total_frames):
+    # Set of all frames in the video
+    all_frames = set(range(total_frames))  
+    unannotated = []   
+    # Loop through all the objects
+    for obj_id, label in id_2_objs.items():
+        # Check if the traffic object
+        if "bulb" in label:
+            # Get the range of annotated frames
+            annotated_frames = set(id_2_traffic.get(obj_id, {}).keys())
+            # Ge the frames that the state is not assigned
+            missing_frames = sorted(all_frames - annotated_frames)  
+
+            if missing_frames:
+                # Group missing frames into ranges
+                ranges = []
+                start = prev = missing_frames[0]
+                # Loop through the frame to add ranges
+                for frame in missing_frames[1:]:
+                    if frame == prev + 1:
+                        prev = frame
+                    else:
+                        ranges.append((start, prev))
+                        start = prev = frame
+                # Add the last range
+                ranges.append((start, prev)) 
+
+                # Create a combined range string
+                range_str = " ".join(
+                    f"{start}-{end}" if start != end else f"{start}" for start, end in ranges
+                )
+                unannotated.append(f"{obj_id}_{label}_missing: {range_str}")
+
+    return unannotated     
+
+# A function to assign state to a traffic object
+def assign_label_state(frame_idx, selected_traffics, id_2_traffic, id_2_objs, traffic_state, start_frame, end_frame, frame_data, display_unannotated_traffic):
+    if not selected_traffics:
+        print("No traffic selected.")
+        return id_2_traffic, []
+    
+    # Get the selected traffic
+    selected_traffic = selected_traffics[0]
+    id = int(selected_traffic.split("_")[0])
+    label = id_2_objs[id]
+
+    # Check for valid ranges
+    if start_frame > end_frame:
+        print("Invalid Range: start_frame is greater than end_frame.")
+        return id_2_traffic, display_unannotated_traffic, []
+    
+    # Initialize if traffic_id not present
+    if id not in id_2_traffic:
+        id_2_traffic[id] = {}
+    
+    # Assign the state for designated frames
+    for idx in range(start_frame, end_frame + 1):
+        id_2_traffic[id][idx] = f"{label}_{traffic_state}"
+    
+    # Update the checkboxes 
+    update_checkBoxes(frame_idx, id_2_objs, id_2_traffic)
+
+    total_frame = len(frame_data)
+    # Recalculate the frames that should be annotated
+    unannotated = unannotated_traffic(id_2_objs, id_2_traffic, total_frame) 
 
 
+    return id_2_traffic, unannotated, []
+
+    
+# A function to convert masks into json format
 def create_coco_json(
     frame_data,
     frame_dir_input,
     frame_mask_data,
     id_2_objs,
+    id_2_traffic
 ):
     categories = []
     images = []
@@ -647,14 +832,39 @@ def create_coco_json(
     frame_dir = Path(frame_dir_input)
     video_name = frame_dir.stem
 
-    # Define unique category IDs
-    unique_labels = sorted(set(id_2_objs.values()))
-    label_to_id = {label: idx + 1 for idx, label in enumerate(unique_labels)}
+    # Define super categories and traffic states
+    traffic_supercategory = {"3-bulb", "4-bulb", "5-bulb"}  # Using a set
+    traffic_state = ["red", "yellow", "green"]
+
+    # Extract unique labels from id_2_objs and remove super categories
+    unique_labels_set = set(id_2_objs.values())
+    unique_labels_set.difference_update(traffic_supercategory)
+    unique_labels = sorted(unique_labels_set) 
+
+    # Assign unique category IDs to unique_labels
+    label_to_id = {label.lower(): idx + 1 for idx, label in enumerate(unique_labels)}
+    
+    # Assign unique category IDs to traffic_supercategory with states
+    category_id = len(label_to_id) + 1  # Continue from where unique_labels left off
+
     for label, category_id in label_to_id.items():
         categories.append(
             {"id": category_id, "name": label.lower(), "supercategory": ""}
         )
 
+    # Assign unique category IDs to traffic_supercategory with states
+    for bulb_type in traffic_supercategory:
+        for state in traffic_state:
+            combined_label = f"{bulb_type}_{state}".lower()  # e.g., "3-bulb_red"
+            label_to_id[combined_label] = category_id
+            categories.append({
+                "id": category_id,
+                "name": combined_label,  # Use combined label as category name
+                "supercategory": bulb_type  # Assign a general supercategory
+            })
+            category_id += 1
+
+    # Fillout the lincense information
     coco_json["licenses"] = [{"name": "", "id": 0, "url": ""}]
     coco_json["info"] = {
         "contributor": "",
@@ -666,9 +876,12 @@ def create_coco_json(
     }
 
     # Image entries
-    output_pattern = "%05d.jpg"
+    output_pattern = "%05d.jpg" 
+
+    # Loop through all frames
     for frame_idx in range(len(frame_data)):
         file_name = output_pattern % frame_idx
+        # Add the image information
         images.append(
             {
                 "id": frame_idx + 1,
@@ -682,20 +895,36 @@ def create_coco_json(
             }
         )
 
-    # Annotation entries with RLE segmentation
+    # Annotation entries 
     annotation_id = 1
+    # Loop through all frames
     for frame_idx in range(len(frame_data)):
+        # Check if there is a mask data for the frame index
         if frame_idx not in frame_mask_data:
             continue
+        # Get all masks present in the frame
         masks = frame_mask_data[frame_idx]
         for obj_id, mask in masks.items():
-            label = id_2_objs.get(obj_id, "Unknown")
+            label = -1
+            # Check if the object is a traffic light and the state is assigned
+            if obj_id in id_2_traffic and frame_idx in id_2_traffic[obj_id]:
+                # Traffic light with state
+                combined_label = id_2_traffic[obj_id][frame_idx].split("_")
+                # Assign the label
+                bulb_type = combined_label[0].lower()
+                traffic_state_current = combined_label[1].lower()
+                label = f"{bulb_type}_{traffic_state_current}"
+            else:
+                # Assingn state for non-traffic light or traffic light without state
+                label = id_2_objs.get(obj_id, "Unknown").lower()
+            
+            # Get the catogory id for the label
             category_id = label_to_id.get(label, -1)
-
             if category_id == -1:
                 print(f"Warning: Label '{label}' not found in category list.")
                 continue
 
+            # Check if the mask is 2 dimensional (H, W)
             if mask.ndim > 2:
                 mask = mask.squeeze()
 
@@ -729,6 +958,7 @@ def create_coco_json(
                 )
                 continue
 
+            # Append the annotation entry
             annotations.append(
                 {
                     "id": annotation_id,
@@ -748,11 +978,15 @@ def create_coco_json(
             )
             annotation_id += 1
 
+    # Update the coco_json dictionary
     coco_json.update(
         {"categories": categories, "images": images, "annotations": annotations}
     )
 
+    # Set the ouput path
     output_path = CONFIG["json_dir"] / f"{video_name}.json"
+
+    # Save the json file in the frames direcotry and the json directory
     with open(output_path, "w") as json_file:
         json.dump(coco_json, json_file)
 
@@ -763,6 +997,7 @@ def create_coco_json(
     print("COCO Annotation Saved")
 
 
+# A functiont to edit the created masks
 def edit_mask(selected_objs, frame_mask_data, frame_data, frame_idx, is_edit):
     if not selected_objs:
         print("No mask selected for editing.")
@@ -770,10 +1005,11 @@ def edit_mask(selected_objs, frame_mask_data, frame_data, frame_idx, is_edit):
             Image.open(frame_data[frame_idx]).convert("RGB"),
             False,  # Reset edit mode
             "Start Editing",  # Reset button text
-            []  # Clear selection
+            [],  # Clear selection
         )
-
-    obj = selected_objs[0]  # Get the first selected object
+    
+    # Get the first selected object
+    obj = selected_objs[0]  
     obj_id = int(obj.split("_")[0])
 
     # Create a copy of mask data to avoid modifying the original
@@ -794,7 +1030,9 @@ def edit_mask(selected_objs, frame_mask_data, frame_data, frame_idx, is_edit):
             # Temporarily remove the mask being edited from display
             if frame_idx not in local_mask_data:
                 local_mask_data[frame_idx] = {}
-            local_mask_data[frame_idx] = frame_mask_data[frame_idx].copy()  # Copy the frame's masks
+            local_mask_data[frame_idx] = frame_mask_data[
+                frame_idx
+            ].copy()  # Copy the frame's masks
             del local_mask_data[frame_idx][obj_id]  # Remove only the edited mask
             print(f"Started editing mask for object ID: {obj_id}")
         is_edit = True
@@ -810,17 +1048,31 @@ def edit_mask(selected_objs, frame_mask_data, frame_data, frame_idx, is_edit):
 
 def annotate_frame_tab():
     with gr.Blocks():
-        frame_data = gr.State([])
-        label_list = load_label_data()
-        points_state = gr.State(PointState.OFF)
-        points = gr.State([])
-        points_type = gr.State([])
-        frame_mask_data = gr.State({})
-        created_masks = gr.State({})
-        num_obj_id = gr.State(0)
-        id_2_label = gr.State({})
-        is_edit = gr.State(False)
 
+         # Stores the list of frame file paths
+        frame_data = gr.State([]) 
+        # Retrieves the list of available labels
+        label_list = load_label_data()  
+        # Current state for point creation (Positive/Negative/Off)
+        points_state = gr.State(PointState.OFF)  
+        # Stores the list of points clicked by the user
+        points = gr.State([])  
+        # Stores the type of each point (1 for Positive, 0 for Negative)
+        points_type = gr.State([])  
+        # Stores masks for each frame {frame_idx: {obj_id: mask}}
+        frame_mask_data = gr.State({})  
+         # Stores created masks {frame_idx: {obj_id: mask_details}}
+        created_masks = gr.State({}) 
+         # Counter for assigning unique object IDs
+        num_obj_id = gr.State(0) 
+        # Maps object IDs to their labels {obj_id: label}
+        id_2_label = gr.State({})  
+        # Maps object IDs to traffic states {obj_id: {frame_idx: state}}
+        id_2_traffic = gr.State({})  
+        # Indicates whether the user is in edit mode
+        is_edit = gr.State(False)  
+
+        # Input for Frame Directory Selection
         with gr.Row():
             frame_dir_input = gr.Textbox(
                 label="Frame Directory Path",
@@ -830,21 +1082,63 @@ def annotate_frame_tab():
 
         # Slider in a new row
         with gr.Row():
+            # Slider lets users select the frame index to view and annotate.
             frame_slider = gr.Slider(minimum=0, maximum=1, label="Choose Frame Index")
 
+
+        # Created Object Masks Display and Edit Button
         with gr.Row():
-            created_objs = gr.CheckboxGroup(
-                choices=[], label="Created Object Masks", value=[]
-            )
+            with gr.Column(scale=3):
+                # CheckboxGroup to display all created object masks with their IDs and labels.
+                created_objs = gr.CheckboxGroup(
+                    choices=[], label="Created Object Masks {obj_id}_{label}_{cur_occurances}", value=[]
+                )
+            # Button to toggle editing mode for selected masks.
             edit_button = gr.Button("Start Editing")
 
         with gr.Row():
-            with gr.Column(min_width=802):
+            # TextArea to shows ranges of frames that have not been annotated for traffic objects.
+            display_unannotated_traffic = gr.TextArea(
+                label="Unannotated Traffic",
+                lines=1,
+                interactive=False
+            )
+
+        with gr.Row():
+            # CheckboxGroup to select traffic objects for state annotation.
+            with gr.Column(scale=2):
+                created_traffics = gr.CheckboxGroup(
+                    choices=[],
+                    label="Created Traffic State",
+                    value=[],
+                    interactive=True,
+                )
+
+            # Radio buttons to select the state of the traffic object.
+            traffic_state = gr.Radio(
+                choices=["red", "yellow", "green"],
+                label="Traffic State",
+                value="red",
+                interactive=True,
+            )
+            with gr.Row():
+                # Number inputs to specify the range of frames for traffic state annotation.
+                start_frame = gr.Number(
+                    label="Start Frame",
+                    precision=0,
+                )
+                end_frame = gr.Number(label="End Frame", precision=0)
+
+        with gr.Row():
+            with gr.Column(scale=2):
+                # Displays the current frame with applied masks.
                 image_display = gr.Image()
 
             with gr.Column():
+                # Dropdown to select the label/category for the object being annotated.
                 label_dropdown = gr.Dropdown(choices=label_list, interactive=True)
                 with gr.Row():
+                    # Buttons to toggle between creating positive/negative points and to undo the last point.
                     toggle_positive_button = gr.Button(
                         "Create Positive Points", interactive=True
                     )
@@ -853,44 +1147,55 @@ def annotate_frame_tab():
                     )
                     undo_points_button = gr.Button("Undo Point", interactive=True)
                 with gr.Row():
+                    # Buttons to create masks based on points and to undo the last mask.
                     create_mask_button = gr.Button("Create Masks", interactive=True)
                     undo_masks_button = gr.Button("Undo Mask", interactive=True)
                 with gr.Row():
-                    propagate_frame_input = gr.Textbox(
-                        label="Frames to track",
-                        placeholder="Enter Frames To Track...",
-                        interactive=True,
-                    )
-                    track_mask_button = gr.Button("Track All")
+                    with gr.Column():
+                        # Number input to specify how many frames to propagate masks.
+                        propagate_frame_input = gr.Number(
+                            label="Frames to track",
+                            interactive=True,
+                        )
+                    with gr.Column():
+                        # Button to track masks across frames and to export annotations as COCO JSON.
+                        track_mask_button = gr.Button("Track All")
+                        json_button = gr.Button("Export Json")
 
+        # When the user submits (enters) the frame directory path, load the frames.
         frame_dir_input.submit(
             fn=load_frames, inputs=frame_dir_input, outputs=[frame_data, frame_slider]
         )
 
+        # When the frame slider value changes, display the corresponding image with masks.
         frame_slider.change(
             fn=display_image,
             inputs=[frame_data, frame_slider, frame_mask_data],
             outputs=[image_display],
         )
 
+        # Toggle positive points creation mode.
         toggle_positive_button.click(
             fn=toggle_points,
             inputs=[points_state, gr.State("Positive")],
             outputs=[toggle_positive_button, toggle_negative_button, points_state],
         )
 
+        # Toggle negative points creation mode.
         toggle_negative_button.click(
             fn=toggle_points,
             inputs=[points_state, gr.State("Negative")],
             outputs=[toggle_positive_button, toggle_negative_button, points_state],
         )
 
+        # When the user selects a point on the image, add it to the points list.
         image_display.select(
             fn=draw_points,
             inputs=[points_state, image_display, points, points_type],
             outputs=[image_display, points, points_type],
         )
 
+        # Create masks based on the points and selected label.
         create_mask_button.click(
             fn=create_mask,
             inputs=[
@@ -916,16 +1221,19 @@ def annotate_frame_tab():
                 id_2_label,
                 is_edit,
                 edit_button,
-                created_objs
+                created_objs,
             ],
         )
 
+
+        # Undo the last point added.
         undo_points_button.click(
             fn=undo_points,
-            inputs=[frame_data, frame_slider, points, points_type, points_state],
+            inputs=[frame_data, frame_slider, points, points_type],
             outputs=[image_display, points, points_type],
         )
 
+        # Undo the last mask created.
         undo_masks_button.click(
             fn=undo_masks,
             inputs=[
@@ -945,6 +1253,7 @@ def annotate_frame_tab():
             ],
         )
 
+        # When the user inputs the number of frames to propagate, track masks.
         propagate_frame_input.submit(
             fn=track_masks,
             inputs=[
@@ -959,6 +1268,7 @@ def annotate_frame_tab():
             outputs=[frame_mask_data],
         )
 
+        # When the "Track All" button is clicked, track masks across all frames.
         track_mask_button.click(
             fn=track_masks,
             inputs=[
@@ -971,14 +1281,48 @@ def annotate_frame_tab():
             ],
             outputs=[frame_mask_data],
         )
+
+        # Toggle edit mode for selected masks.
         edit_button.click(
             fn=edit_mask,
             inputs=[created_objs, frame_mask_data, frame_data, frame_slider, is_edit],
             outputs=[image_display, is_edit, edit_button, created_objs],
         )
 
+        # Export annotations to COCO JSON format.
+        json_button.click(
+            fn=create_coco_json,
+            inputs=[frame_data, frame_dir_input, frame_mask_data, id_2_label, id_2_traffic],
+        )
+
+
+        # Update the checkbox groups when the label mapping changes.
         id_2_label.change(
-            fn=update_checkBox, inputs=[id_2_label], outputs=[created_objs]
+            fn=update_checkBoxes,
+            inputs=[frame_slider, id_2_label, id_2_traffic],
+            outputs=[created_objs, created_traffics],
+        )
+
+        # Update the checkbox groups when the frame slider changes.
+        frame_slider.change(
+            fn=update_checkBoxes,
+            inputs=[frame_slider, id_2_label, id_2_traffic],
+            outputs=[created_objs, created_traffics],
+        )
+
+        # Assign traffic state when the user submits the start frame number.
+        start_frame.submit(
+            fn=assign_label_state,
+            inputs=[frame_slider, created_traffics, id_2_traffic, id_2_label, traffic_state, start_frame, end_frame, frame_data, display_unannotated_traffic],
+            outputs=[id_2_traffic, display_unannotated_traffic, created_traffics]
+        )
+
+
+        # Assign traffic state when the user submits the end frame number.
+        end_frame.submit(
+            fn=assign_label_state,
+            inputs=[frame_slider, created_traffics, id_2_traffic, id_2_label, traffic_state, start_frame, end_frame, frame_data, display_unannotated_traffic],
+            outputs=[id_2_traffic, display_unannotated_traffic, created_traffics]
         )
 
 
@@ -994,10 +1338,14 @@ def main():
 
 
 if __name__ == "__main__":
+    model_cfg = "configs/sam2.1/sam2.1_hiera_b+.yaml"
+    sam2_checkpoint = "checkpoints/sam2.1_hiera_base_plus.pt"
+
+
     gc_collect()
     seed()
     CONFIG["device"] = torch.device("cuda")
-    CONFIG["predictor"] = load_sam()
+    CONFIG["predictor"] = load_sam(model_cfg, sam2_checkpoint)
 
     if CONFIG["predictor"] is None:
         print("Failed to load SAMv2 Predictor. Exiting application.")
