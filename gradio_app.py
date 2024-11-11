@@ -23,6 +23,22 @@ CONFIG = {
     "annotated_frame_dir": Path("autolabeller/Annotated Frames"),
     "last_frame": None,
     "json_dir": Path("autolabeller/COCO_JSON"),
+    "traffic_light_states": [
+        "4-rleft",
+        "4-yleft1",
+        "4-yleft2",
+        "4-gleft",
+        "5dh-red",
+        "5dh-yellow",
+        "5dh-green",
+        "5dh-green-gleft",
+        "5dh-green-yleft",
+        "5dh-yellow-yleft",
+        "5dh-red-gleft",
+        "5dh-red-yleft",
+        "5dh-off",
+        "5dh-other",
+    ],
 }
 
 
@@ -88,11 +104,8 @@ def setup_device():
     return device
 
 
-# Load the sam model 
-def load_sam(
-    model_cfg,
-    sam2_checkpoint
-):
+# Load the sam model
+def load_sam(model_cfg, sam2_checkpoint):
     device = CONFIG["device"]
     try:
         predictor = build_sam2_video_predictor(
@@ -102,7 +115,6 @@ def load_sam(
         return predictor
     except Exception as e:
         print(f"Failed to load SAMv2 Predictor: {e}")
-
 
 
 # Extract frames from video
@@ -117,9 +129,7 @@ def extract_frames(videos_list, video_paths_state):
         video_path = video_paths_state[video]
 
         # Create a directory for each video's frames
-        output_dir = (
-            frame_dir / video.split(".")[0]
-        )  
+        output_dir = frame_dir / video.split(".")[0]
         # Use stem to get the video name without the extension
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -260,22 +270,50 @@ def display_image(frame_data, frame_slider, frame_mask_data):
     # Return the masked image
     return masked_image_pil
 
+
 # List of possible label options
 def load_label_data():
     label_list = [
-        "Barrel",
         "Vehicle",
         "Deer",
         "Pedestrian",
-        "Left Lane Must Turn",
-        "Right Lane Must Turn",
-        "Right Turn Only",
+        "Barrel",
+        "Barricade-t3",
         "Stop",
         "Yield",
-        "Barricade-t3",
+
+        "Right Lane Must Turn",
+        "Left Lane Must Turn",
+
+        "Right Turn Only (words)"
+        "Left Turn Only (words)",
+
+        "Right Turn Only (arrow)",
+        "Left Turn Only (arrow)"
+
         "3-bulb",
         "4-bulb",
-        "5-bulb"
+        "5-bulb",
+
+        "Railroad-crossing-sign"
+        "Railroad-light-pair-on",
+        "Railroad-light-pair-off",
+        
+        "speedLimit5",
+        "speedLimit10",
+        "speedLimit15",
+        "speedLimit20",
+        "speedLimit25",
+        "speedLimit30",
+        "speedLimit35",
+        "speedLimit40",
+        "speedLimit45",
+        "speedLimit50",
+        "speedLimit55",
+        "speedLimit60",
+        "speedLimit65",
+        "speedLimit70",
+        "speedLimit75",
     ]
     return label_list
 
@@ -314,6 +352,7 @@ def toggle_points(points_state, point_type):
     # Return button inner text and point state
     return output_pos, output_neg, points_state
 
+
 # Function to display the annoated points
 def display_points(image, points, points_type):
     # Check if the image is a PIL Image
@@ -332,16 +371,16 @@ def display_points(image, points, points_type):
         x, y = point
         radius = 5
         # Check if positive point (1)
-        if p_type == 1:  
+        if p_type == 1:
             fill_color = (255, 0, 0, 128)  # Semi-transparent red
             outline_color = (255, 0, 0, 255)  # Opaque red
         # Check if negative points
-        elif p_type == 0:  
+        elif p_type == 0:
             fill_color = (0, 0, 255, 128)  # Semi-transparent blue
             outline_color = (0, 0, 255, 255)  # Opaque blue
         # If the point is off skip
         else:
-            continue    
+            continue
 
         # Draw the point on the image
         draw.ellipse(
@@ -356,6 +395,7 @@ def display_points(image, points, points_type):
 
     # Return the annoated image
     return combined
+
 
 # Function to manage drawing points process on the image
 def draw_points(points_state, image, points, points_type, evt: gr.SelectData):
@@ -546,6 +586,7 @@ def undo_points(frame_data, frame_idx, points, points_type):
     image_w_points = display_points(blank_image, new_points, new_points_type)
     return image_w_points, new_points, new_points_type
 
+
 # A function to undo previously created mask
 def undo_masks(
     frame_data, frame_mask_data, created_masks, frame_idx, obj_id, id_2_label
@@ -676,7 +717,7 @@ def track_masks(
                 save_annotated_image(
                     frame_data, video_segments, frame_dir_input, cur_frame_idx
                 )
-            #create_coco_json(frame_data, frame_dir_input, video_segments, id_2_objs)
+            # create_coco_json(frame_data, frame_dir_input, video_segments, id_2_objs)
 
     # Update the mask data for each frame
     frame_mask_data.update(video_segments)
@@ -685,6 +726,7 @@ def track_masks(
     reinitialize_predictor(predictor, inference_state, created_masks)
 
     return frame_mask_data
+
 
 # A function to reload the annoated frame information onto the model
 def reinitialize_predictor(predictor, inference_state, created_masks):
@@ -713,7 +755,8 @@ def reinitialize_predictor(predictor, inference_state, created_masks):
     CONFIG["predictor"] = predictor
     CONFIG["inference_state"] = inference_state
 
-# Function to update the created objects and traffic label 
+
+# Function to update the created objects and traffic label
 def update_checkBoxes(frame_idx, id_2_objs, id_2_traffic):
     # Save the objects
     created_objs = []
@@ -731,25 +774,32 @@ def update_checkBoxes(frame_idx, id_2_objs, id_2_traffic):
             entry = f"{id}_{traffic_data}_{cur_occurances[label]}"
         else:
             entry = f"{id}_{label}_{cur_occurances[label]}"
-            # Check if the object is a traffic 
+            # Check if the object is a traffic
             if "bulb" in label:
                 # Save it to the list that stores unassinged traffics
                 created_traffics.append(entry)
-        
+
         created_objs.append(entry)
         cur_occurances[label] += 1
 
     return gr.CheckboxGroup(
-        choices=created_objs, value=[], interactive=True, label="Created Object Masks {obj_id}_{label}_{cur_occurances}"
+        choices=created_objs,
+        value=[],
+        interactive=True,
+        label="Created Object Masks {obj_id}_{label}_{cur_occurances}",
     ), gr.CheckboxGroup(
-        choices=created_traffics, value=[], interactive=True, label="Traffic States that should be annotated"
+        choices=created_traffics,
+        value=[],
+        interactive=True,
+        label="Traffic States that should be annotated",
     )
+
 
 # A function to display the unannotated traffic object ranges
 def unannotated_traffic(id_2_objs, id_2_traffic, total_frames):
     # Set of all frames in the video
-    all_frames = set(range(total_frames))  
-    unannotated = []   
+    all_frames = set(range(total_frames))
+    unannotated = []
     # Loop through all the objects
     for obj_id, label in id_2_objs.items():
         # Check if the traffic object
@@ -757,7 +807,7 @@ def unannotated_traffic(id_2_objs, id_2_traffic, total_frames):
             # Get the range of annotated frames
             annotated_frames = set(id_2_traffic.get(obj_id, {}).keys())
             # Ge the frames that the state is not assigned
-            missing_frames = sorted(all_frames - annotated_frames)  
+            missing_frames = sorted(all_frames - annotated_frames)
 
             if missing_frames:
                 # Group missing frames into ranges
@@ -771,58 +821,58 @@ def unannotated_traffic(id_2_objs, id_2_traffic, total_frames):
                         ranges.append((start, prev))
                         start = prev = frame
                 # Add the last range
-                ranges.append((start, prev)) 
+                ranges.append((start, prev))
 
                 # Create a combined range string
                 range_str = " ".join(
-                    f"{start}-{end}" if start != end else f"{start}" for start, end in ranges
+                    f"{start}-{end}" if start != end else f"{start}"
+                    for start, end in ranges
                 )
                 unannotated.append(f"{obj_id}_{label}_missing: {range_str}")
 
-    return unannotated     
+    return unannotated
+
 
 # A function to assign state to a traffic object
-def assign_label_state(frame_idx, selected_traffics, id_2_traffic, id_2_objs, traffic_state, start_frame, end_frame, frame_data, display_unannotated_traffic):
+def assign_label_state(frame_idx, selected_traffics, id_2_traffic, id_2_objs, traffic_state_dropdown, start_frame, end_frame, frame_data, display_unannotated_traffic):
     if not selected_traffics:
         print("No traffic selected.")
-        return id_2_traffic, []
+        return id_2_traffic, display_unannotated_traffic, []
     
     # Get the selected traffic
     selected_traffic = selected_traffics[0]
-    id = int(selected_traffic.split("_")[0])
-    label = id_2_objs[id]
-
+    obj_id = int(selected_traffic.split("_")[0])
+    label = id_2_objs[obj_id]
+    
+    # Get the selected traffic state from the dropdown
+    selected_state = traffic_state_dropdown
+    
     # Check for valid ranges
     if start_frame > end_frame:
         print("Invalid Range: start_frame is greater than end_frame.")
         return id_2_traffic, display_unannotated_traffic, []
     
     # Initialize if traffic_id not present
-    if id not in id_2_traffic:
-        id_2_traffic[id] = {}
+    if obj_id not in id_2_traffic:
+        id_2_traffic[obj_id] = {}
     
     # Assign the state for designated frames
-    for idx in range(start_frame, end_frame + 1):
-        id_2_traffic[id][idx] = f"{label}_{traffic_state}"
+    for idx in range(int(start_frame), int(end_frame) + 1):
+        id_2_traffic[obj_id][idx] = selected_state  # Use the selected state directly
     
     # Update the checkboxes 
     update_checkBoxes(frame_idx, id_2_objs, id_2_traffic)
-
+    
     total_frame = len(frame_data)
     # Recalculate the frames that should be annotated
     unannotated = unannotated_traffic(id_2_objs, id_2_traffic, total_frame) 
 
-
     return id_2_traffic, unannotated, []
 
-    
+
 # A function to convert masks into json format
 def create_coco_json(
-    frame_data,
-    frame_dir_input,
-    frame_mask_data,
-    id_2_objs,
-    id_2_traffic
+    frame_data, frame_dir_input, frame_mask_data, id_2_objs, id_2_traffic
 ):
     categories = []
     images = []
@@ -833,36 +883,24 @@ def create_coco_json(
     video_name = frame_dir.stem
 
     # Define super categories and traffic states
-    traffic_supercategory = {"3-bulb", "4-bulb", "5-bulb"}  # Using a set
-    traffic_state = ["red", "yellow", "green"]
+    traffic_states = CONFIG["traffic_light_states"]
+    
 
     # Extract unique labels from id_2_objs and remove super categories
     unique_labels_set = set(id_2_objs.values())
-    unique_labels_set.difference_update(traffic_supercategory)
-    unique_labels = sorted(unique_labels_set) 
+    # Remove intermediate lables
+    intermediate_labels = {"3-bulb", "4-bulb", "5-bulb"}  # Add any other unwanted labels here
+    unique_labels_set -= intermediate_labels
+    unique_labels_set.update(set(traffic_states))
+    unique_labels = sorted(unique_labels_set)
 
     # Assign unique category IDs to unique_labels
     label_to_id = {label.lower(): idx + 1 for idx, label in enumerate(unique_labels)}
-    
-    # Assign unique category IDs to traffic_supercategory with states
-    category_id = len(label_to_id) + 1  # Continue from where unique_labels left off
 
     for label, category_id in label_to_id.items():
         categories.append(
             {"id": category_id, "name": label.lower(), "supercategory": ""}
         )
-
-    # Assign unique category IDs to traffic_supercategory with states
-    for bulb_type in traffic_supercategory:
-        for state in traffic_state:
-            combined_label = f"{bulb_type}_{state}".lower()  # e.g., "3-bulb_red"
-            label_to_id[combined_label] = category_id
-            categories.append({
-                "id": category_id,
-                "name": combined_label,  # Use combined label as category name
-                "supercategory": bulb_type  # Assign a general supercategory
-            })
-            category_id += 1
 
     # Fillout the lincense information
     coco_json["licenses"] = [{"name": "", "id": 0, "url": ""}]
@@ -876,7 +914,7 @@ def create_coco_json(
     }
 
     # Image entries
-    output_pattern = "%05d.jpg" 
+    output_pattern = "%05d.jpg"
 
     # Loop through all frames
     for frame_idx in range(len(frame_data)):
@@ -895,8 +933,12 @@ def create_coco_json(
             }
         )
 
-    # Annotation entries 
+    # Annotation entries
     annotation_id = 1
+    # Mapping from (obj_id, label) to tracking_id
+    traffic_id_mapping = {}
+    # Counter per obj_id to generate unique tracking_ids
+    tracking_id_counters = {}  
     # Loop through all frames
     for frame_idx in range(len(frame_data)):
         # Check if there is a mask data for the frame index
@@ -905,19 +947,34 @@ def create_coco_json(
         # Get all masks present in the frame
         masks = frame_mask_data[frame_idx]
         for obj_id, mask in masks.items():
-            label = -1
+            # Initialize tracking ID
+            tracking_id = None
+
+            # Base tracking ID derived from obj_id
+            base_tracking_id = obj_id * 100
+
+            # Initialize counter for obj_id if not present
+            if obj_id not in tracking_id_counters:
+                tracking_id_counters[obj_id] = 0
+
             # Check if the object is a traffic light and the state is assigned
             if obj_id in id_2_traffic and frame_idx in id_2_traffic[obj_id]:
                 # Traffic light with state
-                combined_label = id_2_traffic[obj_id][frame_idx].split("_")
-                # Assign the label
-                bulb_type = combined_label[0].lower()
-                traffic_state_current = combined_label[1].lower()
-                label = f"{bulb_type}_{traffic_state_current}"
+                label = id_2_traffic[obj_id][frame_idx]
+                # Use the same tracking ID if (obj_id, label) exists
+                state_key = (obj_id, label)
+                if state_key in traffic_id_mapping:
+                    tracking_id = traffic_id_mapping[state_key]
+                else:
+                    # Assign a new tracking ID
+                    tracking_id = base_tracking_id + tracking_id_counters[obj_id]
+                    tracking_id_counters[obj_id] += 1  # Increment counter
+                    traffic_id_mapping[state_key] = tracking_id
             else:
                 # Assingn state for non-traffic light or traffic light without state
                 label = id_2_objs.get(obj_id, "Unknown").lower()
-            
+                tracking_id = base_tracking_id
+
             # Get the catogory id for the label
             category_id = label_to_id.get(label, -1)
             if category_id == -1:
@@ -971,7 +1028,7 @@ def create_coco_json(
                     "attributes": {
                         "occluded": False,
                         "rotation": 0.0,
-                        "track_id": obj_id,
+                        "track_id": tracking_id,
                         "keyframe": True,
                     },
                 },
@@ -1007,9 +1064,9 @@ def edit_mask(selected_objs, frame_mask_data, frame_data, frame_idx, is_edit):
             "Start Editing",  # Reset button text
             [],  # Clear selection
         )
-    
+
     # Get the first selected object
-    obj = selected_objs[0]  
+    obj = selected_objs[0]
     obj_id = int(obj.split("_")[0])
 
     # Create a copy of mask data to avoid modifying the original
@@ -1049,28 +1106,31 @@ def edit_mask(selected_objs, frame_mask_data, frame_data, frame_idx, is_edit):
 def annotate_frame_tab():
     with gr.Blocks():
 
-         # Stores the list of frame file paths
-        frame_data = gr.State([]) 
+        # Stores the list of frame file paths
+        frame_data = gr.State([])
         # Retrieves the list of available labels
-        label_list = load_label_data()  
+        label_list = load_label_data()
         # Current state for point creation (Positive/Negative/Off)
-        points_state = gr.State(PointState.OFF)  
+        points_state = gr.State(PointState.OFF)
         # Stores the list of points clicked by the user
-        points = gr.State([])  
+        points = gr.State([])
         # Stores the type of each point (1 for Positive, 0 for Negative)
-        points_type = gr.State([])  
+        points_type = gr.State([])
         # Stores masks for each frame {frame_idx: {obj_id: mask}}
-        frame_mask_data = gr.State({})  
-         # Stores created masks {frame_idx: {obj_id: mask_details}}
-        created_masks = gr.State({}) 
-         # Counter for assigning unique object IDs
-        num_obj_id = gr.State(0) 
+        frame_mask_data = gr.State({})
+        # Stores created masks {frame_idx: {obj_id: mask_details}}
+        created_masks = gr.State({})
+        # Counter for assigning unique object IDs
+        num_obj_id = gr.State(0)
         # Maps object IDs to their labels {obj_id: label}
-        id_2_label = gr.State({})  
+        id_2_label = gr.State({})
         # Maps object IDs to traffic states {obj_id: {frame_idx: state}}
-        id_2_traffic = gr.State({})  
+        id_2_traffic = gr.State({})
         # Indicates whether the user is in edit mode
-        is_edit = gr.State(False)  
+        is_edit = gr.State(False)
+        # Traffic light states
+        traffic_light_states = CONFIG["traffic_light_states"]
+
 
         # Input for Frame Directory Selection
         with gr.Row():
@@ -1085,13 +1145,14 @@ def annotate_frame_tab():
             # Slider lets users select the frame index to view and annotate.
             frame_slider = gr.Slider(minimum=0, maximum=1, label="Choose Frame Index")
 
-
         # Created Object Masks Display and Edit Button
         with gr.Row():
             with gr.Column(scale=3):
                 # CheckboxGroup to display all created object masks with their IDs and labels.
                 created_objs = gr.CheckboxGroup(
-                    choices=[], label="Created Object Masks {obj_id}_{label}_{cur_occurances}", value=[]
+                    choices=[],
+                    label="Created Object Masks {obj_id}_{label}_{cur_occurances}",
+                    value=[],
                 )
             # Button to toggle editing mode for selected masks.
             edit_button = gr.Button("Start Editing")
@@ -1099,9 +1160,7 @@ def annotate_frame_tab():
         with gr.Row():
             # TextArea to shows ranges of frames that have not been annotated for traffic objects.
             display_unannotated_traffic = gr.TextArea(
-                label="Unannotated Traffic",
-                lines=1,
-                interactive=False
+                label="Unannotated Traffic", lines=1, interactive=False
             )
 
         with gr.Row():
@@ -1115,10 +1174,10 @@ def annotate_frame_tab():
                 )
 
             # Radio buttons to select the state of the traffic object.
-            traffic_state = gr.Radio(
-                choices=["red", "yellow", "green"],
+            traffic_state = gr.Dropdown(
+                choices = traffic_light_states,
                 label="Traffic State",
-                value="red",
+                value=traffic_light_states[0],
                 interactive=True,
             )
             with gr.Row():
@@ -1225,7 +1284,6 @@ def annotate_frame_tab():
             ],
         )
 
-
         # Undo the last point added.
         undo_points_button.click(
             fn=undo_points,
@@ -1292,9 +1350,14 @@ def annotate_frame_tab():
         # Export annotations to COCO JSON format.
         json_button.click(
             fn=create_coco_json,
-            inputs=[frame_data, frame_dir_input, frame_mask_data, id_2_label, id_2_traffic],
+            inputs=[
+                frame_data,
+                frame_dir_input,
+                frame_mask_data,
+                id_2_label,
+                id_2_traffic,
+            ],
         )
-
 
         # Update the checkbox groups when the label mapping changes.
         id_2_label.change(
@@ -1313,16 +1376,35 @@ def annotate_frame_tab():
         # Assign traffic state when the user submits the start frame number.
         start_frame.submit(
             fn=assign_label_state,
-            inputs=[frame_slider, created_traffics, id_2_traffic, id_2_label, traffic_state, start_frame, end_frame, frame_data, display_unannotated_traffic],
-            outputs=[id_2_traffic, display_unannotated_traffic, created_traffics]
+            inputs=[
+                frame_slider,
+                created_traffics,
+                id_2_traffic,
+                id_2_label,
+                traffic_state,
+                start_frame,
+                end_frame,
+                frame_data,
+                display_unannotated_traffic,
+            ],
+            outputs=[id_2_traffic, display_unannotated_traffic, created_traffics],
         )
-
 
         # Assign traffic state when the user submits the end frame number.
         end_frame.submit(
             fn=assign_label_state,
-            inputs=[frame_slider, created_traffics, id_2_traffic, id_2_label, traffic_state, start_frame, end_frame, frame_data, display_unannotated_traffic],
-            outputs=[id_2_traffic, display_unannotated_traffic, created_traffics]
+            inputs=[
+                frame_slider,
+                created_traffics,
+                id_2_traffic,
+                id_2_label,
+                traffic_state,
+                start_frame,
+                end_frame,
+                frame_data,
+                display_unannotated_traffic,
+            ],
+            outputs=[id_2_traffic, display_unannotated_traffic, created_traffics],
         )
 
 
@@ -1341,10 +1423,9 @@ if __name__ == "__main__":
     model_cfg = "configs/sam2.1/sam2.1_hiera_b+.yaml"
     sam2_checkpoint = "checkpoints/sam2.1_hiera_base_plus.pt"
 
-
     gc_collect()
     seed()
-    CONFIG["device"] = torch.device("cuda")
+    CONFIG["device"] = setup_device()
     CONFIG["predictor"] = load_sam(model_cfg, sam2_checkpoint)
 
     if CONFIG["predictor"] is None:
