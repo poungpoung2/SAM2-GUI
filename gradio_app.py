@@ -289,13 +289,13 @@ def load_label_data():
         "Left Turn Only (words)",
 
         "Right Turn Only (arrow)",
-        "Left Turn Only (arrow)"
+        "Left Turn Only (arrow)",
 
         "3-bulb",
         "4-bulb",
         "5-bulb",
 
-        "Railroad-crossing-sign"
+        "Railroad-crossing-sign",
         "Railroad-light-pair-on",
         "Railroad-light-pair-off",
         
@@ -621,13 +621,17 @@ def undo_masks(
     return image_w_mask, frame_mask_data, created_masks, obj_id, id_2_label
 
 
-# A function to save the annoated image
-def save_annotated_image(frame_data, frame_mask_data, frame_dir_input, cur_frame_idx):
+# A function to save the annotated video
+def save_annotated_video(frame_data, frame_mask_data, frame_dir_input):
+    print(f"Saving Video")
     video_name = Path(frame_dir_input).stem
     current_annotated_frame_dir = CONFIG["annotated_frame_dir"] / video_name
+
+    # Create the directory for annotated frames if it doesn't exist
     if not current_annotated_frame_dir.exists():
         current_annotated_frame_dir.mkdir(exist_ok=True, parents=True)
 
+    # Save annotated frames
     for out_frame_idx, frame_path in enumerate(frame_data):
         image = Image.open(frame_path).convert("RGB")
         image_np = np.array(image)
@@ -640,6 +644,27 @@ def save_annotated_image(frame_data, frame_mask_data, frame_dir_input, cur_frame
         output_filename = f"{out_frame_idx:05d}.jpg"
         output_path = current_annotated_frame_dir / output_filename
         masked_image_pil.save(output_path)
+
+    # After saving frames, create a video from the images using FFmpeg
+    # Define the path for the output video
+    output_video_path = CONFIG["annotated_frame_dir"] / f"{video_name}_annotated.mp4"
+
+    # Build the FFmpeg command
+    # Adjust the frame rate (-framerate) as needed
+    command = [
+        "ffmpeg",
+        "-y",  # Overwrite output files without asking
+        "-framerate", "30",  # Set the input frame rate
+        "-i", str(current_annotated_frame_dir / "%05d.jpg"),
+        "-c:v", "libx264",  # Use the H.264 codec
+        "-pix_fmt", "yuv420p",  # Set the pixel format
+        str(output_video_path)
+    ]
+
+    # Run the FFmpeg command
+    subprocess.run(command, check=True)
+
+    print(f"Annotated video saved at {output_video_path}")
 
 
 # A function to track masks over multiple frames
@@ -1189,7 +1214,7 @@ def annotate_frame_tab():
                 end_frame = gr.Number(label="End Frame", precision=0)
 
         with gr.Row():
-            with gr.Column(scale=2):
+            with gr.Column(scale=3):
                 # Displays the current frame with applied masks.
                 image_display = gr.Image()
 
@@ -1219,7 +1244,9 @@ def annotate_frame_tab():
                     with gr.Column():
                         # Button to track masks across frames and to export annotations as COCO JSON.
                         track_mask_button = gr.Button("Track All")
+                        video_button = gr.Button("Save it as Video")
                         json_button = gr.Button("Export Json")
+
 
         # When the user submits (enters) the frame directory path, load the frames.
         frame_dir_input.submit(
@@ -1405,6 +1432,16 @@ def annotate_frame_tab():
                 display_unannotated_traffic,
             ],
             outputs=[id_2_traffic, display_unannotated_traffic, created_traffics],
+        )
+
+        video_button.click(
+            fn=save_annotated_video,
+            inputs=[
+                frame_data,
+                frame_mask_data,
+                frame_dir_input,
+            ],
+            outputs=None, 
         )
 
 
